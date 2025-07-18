@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/muesli/reflow/ansi"
+	"github.com/julez-dev/reflow/ansi"
 )
 
 func TestTruncate(t *testing.T) {
