@@ -1,4 +1,4 @@
-module github.com/muesli/reflow
+module github.com/julez-dev/reflow
 
 go 1.13
 

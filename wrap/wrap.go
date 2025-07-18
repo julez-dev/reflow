@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/julez-dev/reflow/ansi"
 	"github.com/mattn/go-runewidth"
-	"github.com/muesli/reflow/ansi"
 )
 
 var (
