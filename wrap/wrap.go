@@ -14,6 +14,16 @@ var (
 	defaultTabWidth = 4
 )
 
+type wrapState int
+
+const (
+	wGround         wrapState = iota
+	wEscape                   // saw ESC
+	wCSI                      // inside CSI (ESC [)
+	wStringSequence           // inside DCS/OSC/APC/PM/SOS
+	wStringEscape             // inside string sequence, saw ESC
+)
+
 type Wrap struct {
 	Limit         int
 	Newline       []rune
@@ -23,7 +33,7 @@ type Wrap struct {
 
 	buf             *bytes.Buffer
 	lineLen         int
-	ansi            bool
+	state           wrapState
 	forcefulNewline bool
 }
 
@@ -79,36 +89,68 @@ func (w *Wrap) Write(b []byte) (int, error) {
 	}
 
 	for _, c := range s {
-		if c == ansi.Marker {
-			w.ansi = true
-		} else if w.ansi {
-			if ansi.IsTerminator(c) {
-				w.ansi = false
-			}
-		} else if inGroup(w.Newline, c) {
-			w.addNewLine()
-			w.forcefulNewline = false
-			continue
-		} else {
-			width := runewidth.RuneWidth(c)
-
-			if w.lineLen+width > w.Limit {
+		switch w.state {
+		case wGround:
+			if c == ansi.Marker {
+				w.state = wEscape
+				_, _ = w.buf.WriteRune(c)
+			} else if inGroup(w.Newline, c) {
 				w.addNewLine()
-				w.forcefulNewline = true
-			}
-
-			if w.lineLen == 0 {
-				if w.forcefulNewline && !w.PreserveSpace && unicode.IsSpace(c) {
-					continue
-				}
-			} else {
 				w.forcefulNewline = false
+			} else {
+				width := runewidth.RuneWidth(c)
+
+				if w.lineLen+width > w.Limit {
+					w.addNewLine()
+					w.forcefulNewline = true
+				}
+
+				if w.lineLen == 0 {
+					if w.forcefulNewline && !w.PreserveSpace && unicode.IsSpace(c) {
+						continue
+					}
+				} else {
+					w.forcefulNewline = false
+				}
+
+				w.lineLen += width
+				_, _ = w.buf.WriteRune(c)
 			}
 
-			w.lineLen += width
-		}
+		case wEscape:
+			_, _ = w.buf.WriteRune(c)
+			if c == '[' {
+				w.state = wCSI
+			} else if ansi.IsStringSequenceStart(c) {
+				w.state = wStringSequence
+			} else if ansi.IsTerminator(c) {
+				w.state = wGround
+			}
 
-		_, _ = w.buf.WriteRune(c)
+		case wCSI:
+			_, _ = w.buf.WriteRune(c)
+			if ansi.IsTerminator(c) {
+				w.state = wGround
+			}
+
+		case wStringSequence:
+			_, _ = w.buf.WriteRune(c)
+			if c == ansi.Marker {
+				w.state = wStringEscape
+			} else if c == '\a' {
+				w.state = wGround
+			}
+
+		case wStringEscape:
+			_, _ = w.buf.WriteRune(c)
+			if c == '\\' {
+				w.state = wGround
+			} else if c == ansi.Marker {
+				// Another ESC, stay
+			} else {
+				w.state = wStringSequence
+			}
+		}
 	}
 
 	return len(b), nil
