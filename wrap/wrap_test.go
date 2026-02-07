@@ -132,6 +132,60 @@ func TestWrap(t *testing.T) {
 	}
 }
 
+func TestWrap_DCSSequence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		limit    int
+	}{
+		{
+			name:     "DCS sequence not counted in width",
+			input:    "\x1BPqsixeldata\x1B\\foo",
+			expected: "\x1BPqsixeldata\x1B\\foo",
+			limit:    10,
+		},
+		{
+			name:     "text wraps correctly with DCS",
+			input:    "ab\x1BPqdata\x1B\\cdef",
+			expected: "ab\x1BPqdata\x1B\\cd\nef",
+			limit:    4,
+		},
+		{
+			name:     "OSC with BEL not counted",
+			input:    "\x1B]0;title\aabcdef",
+			expected: "\x1B]0;title\aabc\ndef",
+			limit:    3,
+		},
+		{
+			name:     "OSC with ST not counted",
+			input:    "\x1B]8;;url\x1B\\abcdef",
+			expected: "\x1B]8;;url\x1B\\abc\ndef",
+			limit:    3,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := NewWriter(tc.limit)
+			f.KeepNewlines = true
+			_, err := f.Write([]byte(tc.input))
+			if err != nil {
+				t.Error(err)
+			}
+
+			if got := f.String(); got != tc.expected {
+				t.Errorf("got:\n%q\nwant:\n%q", got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestWrapString(t *testing.T) {
 	t.Parallel()
 

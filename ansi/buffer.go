@@ -19,20 +19,56 @@ func (w Buffer) PrintableRuneWidth() int {
 
 // PrintableRuneWidth returns the cell width of the given string.
 func PrintableRuneWidth(s string) int {
+	const (
+		ground         = iota
+		escape         // saw ESC, waiting for next char
+		csiSequence    // inside CSI sequence (ESC [), waiting for terminator
+		stringSequence // inside DCS/OSC/APC/PM/SOS, waiting for ST (ESC \)
+		stringEscape   // inside string sequence, saw ESC, checking for backslash
+	)
+
 	var n int
-	var ansi bool
+	state := ground
 
 	for _, c := range s {
-		if c == Marker {
-			// ANSI escape sequence
-			ansi = true
-		} else if ansi {
-			if IsTerminator(c) {
-				// ANSI sequence terminated
-				ansi = false
+		switch state {
+		case ground:
+			if c == Marker {
+				state = escape
+			} else {
+				n += runewidth.RuneWidth(c)
 			}
-		} else {
-			n += runewidth.RuneWidth(c)
+		case escape:
+			if c == '[' {
+				state = csiSequence
+			} else if IsStringSequenceStart(c) {
+				state = stringSequence
+			} else if IsTerminator(c) {
+				// Two-character escape (e.g. ESC c), done
+				state = ground
+			}
+			// else: intermediate byte, stay in escape
+		case csiSequence:
+			if IsTerminator(c) {
+				state = ground
+			}
+		case stringSequence:
+			if c == Marker {
+				state = stringEscape
+			} else if c == '\a' {
+				// BEL terminates OSC sequences
+				state = ground
+			}
+		case stringEscape:
+			if c == '\\' {
+				// ST (String Terminator) = ESC backslash
+				state = ground
+			} else if c == Marker {
+				// Another ESC — stay in stringEscape
+			} else {
+				// False alarm, back to string sequence
+				state = stringSequence
+			}
 		}
 	}
 

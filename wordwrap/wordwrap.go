@@ -13,6 +13,16 @@ var (
 	defaultNewline     = []rune{'\n'}
 )
 
+type wordWrapState int
+
+const (
+	wwGround         wordWrapState = iota
+	wwEscape                       // saw ESC
+	wwCSI                          // inside CSI (ESC [)
+	wwStringSequence               // inside DCS/OSC/APC/PM/SOS
+	wwStringEscape                 // inside string sequence, saw ESC
+)
+
 // WordWrap contains settings and state for customisable text reflowing with
 // support for ANSI escape sequences. This means you can style your terminal
 // output without affecting the word wrapping algorithm.
@@ -27,7 +37,7 @@ type WordWrap struct {
 	word  ansi.Buffer
 
 	lineLen int
-	ansi    bool
+	state   wordWrapState
 }
 
 // NewWriter returns a new instance of a word-wrapping writer, initialized with
@@ -99,50 +109,83 @@ func (w *WordWrap) Write(b []byte) (int, error) {
 	}
 
 	for _, c := range s {
-		if c == '\x1B' {
-			// ANSI escape sequence
-			_, _ = w.word.WriteRune(c)
-			w.ansi = true
-		} else if w.ansi {
-			_, _ = w.word.WriteRune(c)
-			if (c >= 0x40 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) {
-				// ANSI sequence terminated
-				w.ansi = false
-			}
-		} else if inGroup(w.Newline, c) {
-			// end of current line
-			// see if we can add the content of the space buffer to the current line
-			if w.word.Len() == 0 {
-				if w.lineLen+w.space.Len() > w.Limit {
-					w.lineLen = 0
-				} else {
-					// preserve whitespace
-					_, _ = w.buf.Write(w.space.Bytes())
+		switch w.state {
+		case wwGround:
+			if c == '\x1B' {
+				_, _ = w.word.WriteRune(c)
+				w.state = wwEscape
+			} else if inGroup(w.Newline, c) {
+				// end of current line
+				// see if we can add the content of the space buffer to the current line
+				if w.word.Len() == 0 {
+					if w.lineLen+w.space.Len() > w.Limit {
+						w.lineLen = 0
+					} else {
+						// preserve whitespace
+						_, _ = w.buf.Write(w.space.Bytes())
+					}
+					w.space.Reset()
 				}
-				w.space.Reset()
+
+				w.addWord()
+				w.addNewLine()
+			} else if unicode.IsSpace(c) {
+				// end of current word
+				w.addWord()
+				_, _ = w.space.WriteRune(c)
+			} else if inGroup(w.Breakpoints, c) {
+				// valid breakpoint
+				w.addSpace()
+				w.addWord()
+				_, _ = w.buf.WriteRune(c)
+				w.lineLen++
+			} else {
+				// any other character
+				_, _ = w.word.WriteRune(c)
+
+				// add a line break if the current word would exceed the line's
+				// character limit
+				if w.lineLen+w.space.Len()+w.word.PrintableRuneWidth() > w.Limit &&
+					w.word.PrintableRuneWidth() < w.Limit {
+					w.addNewLine()
+				}
 			}
 
-			w.addWord()
-			w.addNewLine()
-		} else if unicode.IsSpace(c) {
-			// end of current word
-			w.addWord()
-			_, _ = w.space.WriteRune(c)
-		} else if inGroup(w.Breakpoints, c) {
-			// valid breakpoint
-			w.addSpace()
-			w.addWord()
-			_, _ = w.buf.WriteRune(c)
-			w.lineLen++
-		} else {
-			// any other character
+		case wwEscape:
 			_, _ = w.word.WriteRune(c)
+			if c == '[' {
+				w.state = wwCSI
+			} else if ansi.IsStringSequenceStart(c) {
+				w.state = wwStringSequence
+			} else if ansi.IsTerminator(c) {
+				// Two-character escape, done
+				w.state = wwGround
+			}
 
-			// add a line break if the current word would exceed the line's
-			// character limit
-			if w.lineLen+w.space.Len()+w.word.PrintableRuneWidth() > w.Limit &&
-				w.word.PrintableRuneWidth() < w.Limit {
-				w.addNewLine()
+		case wwCSI:
+			_, _ = w.word.WriteRune(c)
+			if ansi.IsTerminator(c) {
+				w.state = wwGround
+			}
+
+		case wwStringSequence:
+			_, _ = w.word.WriteRune(c)
+			if c == '\x1B' {
+				w.state = wwStringEscape
+			} else if c == '\a' {
+				// BEL terminates OSC
+				w.state = wwGround
+			}
+
+		case wwStringEscape:
+			_, _ = w.word.WriteRune(c)
+			if c == '\\' {
+				// ST = ESC backslash
+				w.state = wwGround
+			} else if c == '\x1B' {
+				// Another ESC, stay
+			} else {
+				w.state = wwStringSequence
 			}
 		}
 	}

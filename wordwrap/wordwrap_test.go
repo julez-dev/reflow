@@ -153,6 +153,61 @@ func TestWordWrap(t *testing.T) {
 	}
 }
 
+func TestWordWrap_DCSSequence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		limit    int
+	}{
+		{
+			name:     "DCS sequence not counted in width",
+			input:    "\x1BPqsixeldata\x1B\\ foo",
+			expected: "\x1BPqsixeldata\x1B\\ foo",
+			limit:    10,
+		},
+		{
+			name:     "text wraps around DCS",
+			input:    "hello \x1BPqsixeldata\x1B\\world foo",
+			expected: "hello\n\x1BPqsixeldata\x1B\\world\nfoo",
+			limit:    5,
+		},
+		{
+			name:     "OSC hyperlink not counted",
+			input:    "\x1B]8;;https://example.com\x1B\\link\x1B]8;;\x1B\\ bar",
+			expected: "\x1B]8;;https://example.com\x1B\\link\x1B]8;;\x1B\\ bar",
+			limit:    10,
+		},
+		{
+			name:     "OSC with BEL not counted",
+			input:    "\x1B]0;title\abar baz",
+			expected: "\x1B]0;title\abar\nbaz",
+			limit:    5,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := NewWriter(tc.limit)
+			f.KeepNewlines = true
+			_, err := f.Write([]byte(tc.input))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			_ = f.Close()
+
+			if got := f.String(); got != tc.expected {
+				t.Errorf("got:\n%q\nwant:\n%q", got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestWordWrapString(t *testing.T) {
 	actual := String("foo bar", 3)
 	expected := "foo\nbar"

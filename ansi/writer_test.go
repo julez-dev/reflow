@@ -114,3 +114,60 @@ func TestWriter_RestoreAnsi(t *testing.T) {
 		t.Fatalf("b.String() should be \"\\x1B[38;2;249;38;114m\", got %s", s)
 	}
 }
+
+func TestWriter_DCSPassthrough(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "DCS sequence passed through entirely",
+			input:    "\x1BPqsixeldata\x1B\\",
+			expected: "\x1BPqsixeldata\x1B\\",
+		},
+		{
+			name:     "text around DCS preserved",
+			input:    "ab\x1BPqdata\x1B\\cd",
+			expected: "ab\x1BPqdata\x1B\\cd",
+		},
+		{
+			name:     "OSC with BEL",
+			input:    "\x1B]0;title\afoo",
+			expected: "\x1B]0;title\afoo",
+		},
+		{
+			name:     "OSC with ST",
+			input:    "\x1B]8;;https://example.com\x1B\\link",
+			expected: "\x1B]8;;https://example.com\x1B\\link",
+		},
+		{
+			name:     "mixed CSI and DCS",
+			input:    "\x1B[1mfoo\x1BPqdata\x1B\\\x1B[0mbar",
+			expected: "\x1B[1mfoo\x1BPqdata\x1B\\\x1B[0mbar",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			forward := &bytes.Buffer{}
+			w := &Writer{Forward: forward}
+
+			n, err := w.Write([]byte(tc.input))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if n != len(tc.input) {
+				t.Fatalf("n = %d, want %d", n, len(tc.input))
+			}
+			if got := forward.String(); got != tc.expected {
+				t.Errorf("output = %q, want %q", got, tc.expected)
+			}
+		})
+	}
+}
